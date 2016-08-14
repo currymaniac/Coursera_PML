@@ -1,0 +1,161 @@
+---
+title: "Practical Machine Learning - Final Assignment"
+author: "Chris McGrillen"
+date: "14 August 2016"
+output: html_document
+---
+## Background (from assignment description)
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+```{r, echo=FALSE, eval=FALSE}
+# Note, due to the time taken to run the model building code, many chunks of this file have been set to eval=false
+# The visual output has then been replicated 
+setwd("C:/Users/Chris/Documents/Learning/Data Science/Machine_Learning/Course Project")
+
+rm(list=ls())
+```
+
+## Approach
+
+The general approach to this project has been to first subset the training data to those predictors that can be used to predict against the test case set (not all can be due to the entire field being missing in set of 20 test cases).
+
+Once that was completed a series of models were created and tested for accuracy - each model was trained against 60% of the training data and tested against the remaining 40%. These models were then compared. 
+
+Prior to creating the models I had considered combining multiple models, but the accuracy of the final model chosen (a gbm - Generalized Boosted Model) was high enough that this was not required.
+
+The final model selected was a Generalized Boosted Model, with an accuracy 96.6%.
+
+## Method
+### Preparation
+Load the required libraries.
+```{r}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(gbm)
+library(MASS)
+```
+
+Upon review of the two files, it was noted that some of the columns in the 'testing' data were always NA. As these are variables that cannot be used to predict in the testing data at all, they were removed from the training data in order to prevent the building of irrelevant models. This also helps to improve the computational efficiency of some of the prediction algorithms used.
+```{r, eval=FALSE}
+# Read in the files (stored in the current working directory)
+pml <- read.csv("pml-training.csv")
+t <- read.csv("pml-testing.csv")
+
+# Subset to only those variables that are measurable in our final dataset
+# And remove those that about the measurement of the event rather than the event itself, e.g. the row number and time.
+s <- t[, colSums(is.na(t)) != nrow(t)]
+snames <- names(s)
+snames[60] <- "classe" #As the 'training' data doesn't have a classe variable, but has a problem id instead
+snames <- snames[8:60]
+pml <- pml[,snames]
+```
+
+Although one dataset is referred to as 'testing' it is in fact a validation or evaluation dataset (i.e. a set of test cases), used to evaluate the effectiveness of the final model from this assignment. Thus, the training data is divided into training and testing sets.
+
+(Note that originally I had divided this data in training, testing and validation for the purposes of combining models - however this is no longer the case due to the high accuracy achieve by the GBM, see below).
+```{r, eval=FALSE}
+set.seed(34781)
+
+## Split the data into three sets, training, testing and validation
+inTrain <- createDataPartition(y=pml$classe, p=0.6, list=FALSE)
+
+training <- pml[inTrain,]
+
+testing <- pml[-inTrain,]
+```
+
+### Modelling
+
+**Decision Tree**
+
+Next we start to build the models. At first, a random forest was attempted (with the formula **_classe ~ ._**), however this proved to be too slow. Instead, a decision tree was used as the first model.
+```{r, eval=FALSE}
+## Try with a decision tree
+mod1 <- train(classe ~ ., data=training, method="rpart")
+pred1 <- predict(mod1, testing, na.action = na.pass)
+```
+```{r, fig.align='center'}
+accur1 <- confusionMatrix(pred1, testing$classe)
+accur1$overall["Accuracy"]
+accur1$byClass
+rpart.plot(mod1$finalModel)
+```
+
+There are some obvious issues with this model, namely that there is no branch that ever predicts classe 'D' as the outcome. However, this can be used as a starting point for our next model. The accuracy of this model is also quite low.
+
+**Random Forest**
+
+Now that we have a decision tree built, we can use the variables used in that tree to as the basis for a random forest. This greatly improves the running speed of the random forest (as opposed to using all variables).
+```{r, eval=FALSE}
+## Try with a random forest
+mod2 <- train(classe ~ roll_belt+pitch_forearm+magnet_dumbbell_y+roll_forearm, data=training, method="rf")
+pred2 <- predict(mod2, testing, na.action = na.pass)
+```
+```{r}
+accur2 <- confusionMatrix(pred2, testing$classe)
+accur2$overall["Accuracy"]
+accur2$byClass
+```
+
+The random forest, while taking quite a long time to compute, is much more accurate than the decision tree. However, it should be possible to increase the accuracy slightly more, potentially by using boosting or other methods.
+
+**Generalized Boosted Model (gbm)**
+
+Given the high accuracy of the random forest, it's clear that a boosted model gives very good results with this dataset. To that end, a generalized boosted model was attempted to see if it was possible to advance on the accuracy already achieved.
+```{r, eval=FALSE}
+## Try with gbm
+mod3 <- train(classe ~ ., data=training, method="gbm")
+pred3 <- predict(mod3, testing, na.action = na.pass)
+```
+```{r, echo=FALSE}
+accur3 <- confusionMatrix(pred3, testing$classe)
+accur3$overall["Accuracy"]
+accur3$byClass
+```
+
+The GBM gives the highest accuracy so far, though computational time was much longer than for the random forest.
+
+**Linear Discriminant Analysis**
+
+All of the models used so far have been similar to a degree, and whilst they have given good results it is worth attempting a different kind of model to validate that this is indeed a good model to use.
+```{r, eval=FALSE}
+mod4 <- train(classe ~., data=training, method='lda')
+pred4 <- predict(mod4, testing)
+```
+```{r, echo=FALSE}
+accur4 <- confusionMatrix(pred4,testing$classe)
+accur4$overall["Accuracy"]
+accur4$byClass
+```
+
+The accuracy of this model is much lower than the previous two, and hence it is not a strong candidate for the final model.
+
+## Picking a final model
+
+Now that we've explored multiple models, we need to pick one. The obvious answer is the generalized boosted model, which has the highest accuracy of all the models tested. However, it is also worth looking at the accuracy for each of the individual classes, to ensure that the model we select is not biased to one of the classes.
+
+```{r}
+tab <- rbind(
+  c(accur1$byClass[,"Balanced Accuracy"],accur1$overall["Accuracy"]),
+  c(accur2$byClass[,"Balanced Accuracy"],accur2$overall["Accuracy"]),
+  c(accur3$byClass[,"Balanced Accuracy"],accur3$overall["Accuracy"]),
+  c(accur4$byClass[,"Balanced Accuracy"],accur4$overall["Accuracy"])
+)
+row.names(tab) <- c("Decision Tree","Random Forest", "GBM", "LDA")
+print(tab)
+```
+
+Reviewing the table above, we can see clearly the drop in accuracy that the decision tree has for classe 'D' (caused by the fact that there are no leaves that end in classe 'D').
+
+The random forest dips in accuracy slightly for classes 'B' and 'C' - this may be explained by our use of specific variables rather than allowing the forest to use all the variables available.
+
+The generalized boosted model is generally consistent across all classes, with a slight uptick in accuracy for classe 'A'. It is also the highest accuracy overall.
+
+The linear discriminant analysis, whilst more accurate than the decision tree, is much less accurate than the other two models.
+
+In summary, **the generalized boosted model gives the best results for this dataset**, and will be used to submit answers on the test cases.
